@@ -11,4 +11,5 @@ export const LIMITS = {
   toolTimeoutMs: 30_000,
   outputRetries: 2,
   maxTokens: 1_024,
+  maxModelCallsPerMessage: 12, // presupuesto de llamadas al modelo de agente por mensaje (incluye reintentos)
 } as const;

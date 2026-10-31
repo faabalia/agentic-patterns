@@ -7,29 +7,41 @@ import { toInputSchema } from "./llm.js";
 
 export type Risk = "low" | "high";
 
+/** Contexto inyectado por el código (nunca por el modelo): identidad del cliente y cancelación. */
+export type ToolContext = { customerId: string; signal: AbortSignal };
+
 export type ToolDef<S extends z.ZodType = z.ZodType> = {
   name: string;
   description: string;
   risk: Risk;
   schema: S;
-  run: (args: z.infer<S>) => Promise<string>;
+  run: (args: z.infer<S>, ctx: ToolContext) => Promise<string>;
 };
 
 // Datos de ejemplo
-const INVOICES: Record<string, { amount: number; status: string; date: string }> = {
-  "INV-1001": { amount: 49.9, status: "pagada", date: "2026-09-15" },
-  "INV-1002": { amount: 120.0, status: "pendiente", date: "2026-10-02" },
+type Invoice = { customerId: string; amount: number; refunded: number; status: string; date: string };
+const INVOICES: Record<string, Invoice> = {
+  "INV-1001": { customerId: "cus-demo", amount: 49.9, refunded: 0, status: "pagada", date: "2026-09-15" },
+  "INV-1002": { customerId: "cus-demo", amount: 120.0, refunded: 0, status: "pendiente", date: "2026-10-02" },
+  "INV-2001": { customerId: "cus-otro", amount: 300.0, refunded: 0, status: "pagada", date: "2026-10-10" },
 };
+
+/** Solo devuelve facturas del cliente autenticado; "no existe" y "no es tuya" son indistinguibles. */
+function ownInvoice(invoiceId: string, ctx: ToolContext): Invoice | undefined {
+  const inv = INVOICES[invoiceId];
+  return inv && inv.customerId === ctx.customerId ? inv : undefined;
+}
 
 const lookupInvoice: ToolDef<z.ZodObject<{ invoiceId: z.ZodString }>> = {
   name: "lookup_invoice",
   description: "Consulta el importe, estado y fecha de una factura por su ID (formato INV-XXXX). Solo lectura.",
   risk: "low",
   schema: z.object({ invoiceId: z.string().regex(/^INV-\d{4}$/) }),
-  run: async ({ invoiceId }) => {
-    const inv = INVOICES[invoiceId];
+  run: async ({ invoiceId }, ctx) => {
+    const inv = ownInvoice(invoiceId, ctx);
     if (!inv) return `Error: la factura ${invoiceId} no existe. Pide al usuario que verifique el ID.`;
-    return JSON.stringify({ invoiceId, ...inv });
+    const { amount, refunded, status, date } = inv;
+    return JSON.stringify({ invoiceId, amount, refunded, status, date });
   },
 };
 
@@ -43,11 +55,16 @@ const issueRefund: ToolDef<z.ZodObject<{ invoiceId: z.ZodString; amount: z.ZodNu
     amount: z.number().positive().max(500),
     reason: z.string().min(5),
   }),
-  run: async ({ invoiceId, amount }) => {
-    const inv = INVOICES[invoiceId];
-    if (!inv) return `Error: la factura ${invoiceId} no existe.`;
-    if (inv.status !== "pagada") return `Error: la factura ${invoiceId} no está pagada, no se puede reembolsar.`;
-    if (amount > inv.amount) return `Error: el importe supera el de la factura (${inv.amount}).`;
+  run: async ({ invoiceId, amount }, ctx) => {
+    const inv = ownInvoice(invoiceId, ctx);
+    if (!inv) throw new Error(`la factura ${invoiceId} no existe`);
+    if (inv.status !== "pagada") throw new Error(`la factura ${invoiceId} no admite reembolso (estado: ${inv.status})`);
+    // Acumulado: impide reembolsar varias veces la misma factura por encima de su importe.
+    const available = Math.round((inv.amount - inv.refunded) * 100) / 100;
+    if (amount > available) throw new Error(`el importe supera lo reembolsable (${available} EUR)`);
+    if (ctx.signal.aborted) throw new Error("operación cancelada");
+    inv.refunded = Math.round((inv.refunded + amount) * 100) / 100;
+    if (inv.refunded >= inv.amount) inv.status = "reembolsada";
     return `Reembolso de ${amount} EUR emitido sobre ${invoiceId}.`;
   },
 };
@@ -56,9 +73,9 @@ const searchDocs: ToolDef<z.ZodObject<{ query: z.ZodString }>> = {
   name: "search_docs",
   description: "Busca en la base de conocimiento de soporte técnico. Solo lectura.",
   risk: "low",
-  schema: z.object({ query: z.string().min(2) }),
-  run: async ({ query }) =>
-    `Resultados para "${query}": 1) Reinicia la app y borra la caché. 2) Si persiste, actualiza a la v3.2.`,
+  schema: z.object({ query: z.string().min(2).max(200) }),
+  // No se refleja la consulta en la salida: evita inyección reflejada hacia el modelo y el juez.
+  run: async () => "Resultados: 1) Reinicia la app y borra la caché. 2) Si persiste, actualiza a la v3.2.",
 };
 
 const getPlans: ToolDef<z.ZodObject<Record<string, never>>> = {

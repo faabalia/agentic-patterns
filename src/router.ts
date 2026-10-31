@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { LIMITS, MODELS } from "./config.js";
 import { structured } from "./llm.js";
+import { maskPII } from "./guards.js";
 
 /* ─────────────── Patrón 01 · Router ─────────────── */
 
@@ -29,7 +30,8 @@ export async function classify(msg: string): Promise<Decision> {
 /** Devuelve la ruta o `null` si hay que escalar a un humano. */
 export async function route(msg: string): Promise<AgentRoute | null> {
   const decision = await classify(msg);
-  console.log(`[router] ${decision.route} (${decision.confidence.toFixed(2)}) · ${decision.reason}`);
+  // El motivo puede citar datos del usuario: se enmascara antes de registrarlo.
+  console.log(`[router] ${decision.route} (${decision.confidence.toFixed(2)}) · ${maskPII(decision.reason)}`);
 
   if (decision.route === "unknown" || decision.confidence < LIMITS.routerMinConfidence) {
     return null; // nunca forzar una categoría sin información suficiente

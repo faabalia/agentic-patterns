@@ -4,29 +4,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Proyecto
 
-Asistente CLI de atención al cliente (tienda online) que implementa patrones agénticos con el SDK de
-Anthropic en TypeScript. Código, comentarios, prompts y mensajes al usuario están en español.
+Asistente de atención al cliente (tienda online) con CLI y web, que implementa patrones agénticos con
+el SDK de Anthropic en TypeScript. Código, comentarios, prompts y mensajes al usuario están en
+español.
 
 ## Comandos
 
 ```bash
 npm install
 npm start            # tsx --env-file=.env src/index.ts — CLI interactivo (requiere .env con ANTHROPIC_API_KEY)
-npm run typecheck    # tsc --noEmit (strict + noUncheckedIndexedAccess)
+npm run web:api      # API HTTP + SSE en http://127.0.0.1:8787 (mismo .env)
+npm run web:app      # Angular dev server en http://localhost:4200 con proxy /api (requiere npm --prefix web install)
+npm test             # backend: Vitest sobre src/**/*.test.ts
+npm run web:test     # frontend: Angular + Vitest (specs en web/src)
+npm run test:all     # ambos
+npm run typecheck    # tsc --noEmit (strict + noUncheckedIndexedAccess), solo backend/src
 npm audit
 gitleaks detect --source . -v   # binario aparte (brew install gitleaks), no es un paquete npm
 ```
 
-No hay framework de tests ni linter. Para probar funciones deterministas (guards, herramientas) sin
-llamar a la API, importa los módulos desde un script `.mts` y ejecútalo con
-`npx tsx --env-file=.env <script>.mts` (debe ser `.mts`: el top-level await no funciona en `.ts`
-fuera de `src/`). Los mensajes de prueba manuales están en el README.
+No hay linter. El backend usa Vitest (`vitest.config.ts` limita a `src/**/*.test.ts`); el frontend
+usa el builder `@angular/build:unit-test` (Vitest + jsdom, globals en `web/tsconfig.spec.json`).
+Para probar funciones deterministas sin llamar a la API puedes escribir tests en `src/**/*.test.ts`
+o usar un script `.mts` con `npx tsx --env-file=.env <script>.mts` (debe ser `.mts`: el top-level
+await no funciona en `.ts` fuera de `src/`). Los mensajes de prueba manuales están en el README.
 
 ## Arquitectura
 
 Pipeline por mensaje en `handle(rawMessage, customerId)` (`src/index.ts`):
 
-1. **Input guard** (`src/guards.ts`, patrón 02): longitud → `normalize` (NFKC + quitar invisibles)
+1. **Input guard** (`src/guards.ts`, patrón 02): longitud → `normalize` (NFKC + quitar invisibles,
+   en `src/untrusted.ts`)
    → regex de inyección obvia → clasificador LLM (`MODELS.fast`) → `wrapAsUntrustedData`.
    Si falla, devuelve una respuesta fija sin llegar al modelo principal.
 2. **Router** (`src/router.ts`, patrón 01): clasifica en `billing | tech | sales | unknown` con
@@ -35,7 +43,8 @@ Pipeline por mensaje en `handle(rawMessage, customerId)` (`src/index.ts`):
    con `MODELS.smart`, limitado por `maxAgentSteps` y el presupuesto de la `Session`.
    `executeTool` aplica: herramienta permitida en `TOOLSETS[route]` → validación zod →
    aprobación humana si `risk === "high"` (patrón 09, `src/approvals.ts`) → ejecución con timeout.
-   Los resultados correctos se acumulan como `evidence`.
+   Los resultados correctos se acumulan como `evidence`. Un rechazo vuelve al modelo vía
+   `formatRejectionToolResult` (`src/approval-format.ts`), que sanea el motivo como no confiable.
 4. **Output guard** (`src/guards.ts`, patrón 03): vacío / secretos-PII / grounding LLM contra
    `evidence`. Si falla, `runAgent` se vuelve a llamar con feedback hasta `outputRetries`;
    agotados, devuelve `SAFE_FALLBACK`.
@@ -46,9 +55,30 @@ Piezas transversales:
   Router, clasificador de riesgo y juez de grounding lo usan.
 - `src/tools.ts`: herramientas simuladas con datos en memoria (`INVOICES`). `ToolDef` = nombre,
   descripción, `risk`, esquema zod y `run(args, ctx)`. `TOOLSETS` limita qué ve cada ruta.
+- `src/untrusted.ts`: `normalize` (NFKC + invisibles), `escapeForTag` y `sanitizeForPrompt` (cap de
+  longitud); base compartida por guards, prompts y motivos de rechazo.
 - `src/config.ts`: modelos (`claude-haiku-5-5` rápido, `claude-sonnet-5-5` principal) y todos los límites.
 - Módulos ESM con `module: NodeNext`: los imports relativos llevan extensión `.js`.
 - La identidad del cliente en el CLI es `DEMO_CUSTOMER_ID` (por defecto `cus-demo`).
+
+### Canal web (`src/server/` + `web/`)
+
+- `src/server/index.ts` es el composition root: inyecta un `ApprovalBroker` en el pipeline con
+  `setApprovalHandler` y arranca el servidor en `LIMITS.webHost`:`LIMITS.webPort` con
+  `listenWebServer`. Es un proceso distinto del CLI. Por defecto solo escucha en loopback.
+- `application/approval-broker.ts`: cola en memoria que emite `approval` / `approval-resolved`,
+  resuelve por id y deniega al agotar `LIMITS.approvalTimeoutMs`. Sin canal, se deniega por defecto.
+- `application/chat-service.ts`: valida mensaje y impone un único turno en curso (`CHAT_BUSY`).
+- `infrastructure/http-server.ts`: adaptador `node:http` sin frameworks. API: `GET /api/health`,
+  `GET /api/events` (SSE), `POST /api/chat`, `POST /api/approvals/:id`. Valida JSON, content-type,
+  tamaño de cuerpo (`LIMITS.maxBodyBytes`), `Host`/`Origin` contra loopback (anti DNS rebinding) y
+  no habilita CORS.
+- `web/` es una app Angular 21 standalone con capas `domain/` (modelos y puertos), `application/`
+  (`ChatStore` con signals), `infrastructure/` (HttpClient, EventSource) y `presentation/`
+  (`chat-page`, `approval-panel`). El proxy de desarrollo (`web/proxy.conf.json`) apunta a 8787.
+- La web es mono-usuario y sin autenticación real: `customerId` sale de `DEMO_CUSTOMER_ID`, no del
+  body. No convertirla en multiusuario sin sesión autenticada y aprobaciones persistentes.
+- El texto del modelo se renderiza con interpolación Angular (nunca `innerHTML`).
 
 ## Reglas de seguridad (obligatorias)
 
@@ -76,18 +106,24 @@ Cualquier cambio debe respetar estas reglas; si una tarea exige romper alguna, p
   (`<user_message>`, `<mensaje>`, `<evidencia>`, `<respuesta>`) pasa por `escapeForTag`.
 - Nunca se concatena texto no confiable ni generado por el modelo en el `system` prompt.
   El feedback de reintento va en el turno de usuario y usa solo mensajes fijos.
-- La normalización de entrada (`normalize` en `src/guards.ts`) elimina caracteres invisibles
+- La normalización de entrada (`normalize` en `src/untrusted.ts`) elimina caracteres invisibles
   (tag chars, bidi, BOM); la longitud se comprueba antes y después de NFKC.
+- El motivo de rechazo de una aprobación es texto no confiable: se normaliza, se recorta a 500
+  caracteres y se escapa antes de envolverlo en `<motivo_rechazo untrusted="true">`.
 
 ### Human-in-the-loop
 - Sin canal de aprobación, la acción se deniega por defecto.
 - El aprobador ve cliente, mensaje original, acción y argumentos (con `JSON.stringify`, que escapa
   secuencias de control).
-- Hay un único `readline` sobre stdin (`setApprovalInterface`).
+- El canal se inyecta con `setApprovalHandler`: CLI (`readline`) o web (`ApprovalBroker`). Hay un
+  único `readline` sobre stdin (`setApprovalInterface`).
+- En la web, toda aprobación caduca y se rechaza; el navegador solo puede aprobar o rechazar, nunca
+  cambiar el `customerId`.
 
 ### Límites
 - Todo límite vive en `src/config.ts`: pasos del agente, timeout de herramientas, reintentos de
-  salida, tokens y `maxModelCallsPerMessage`. No añadas bucles sin límite.
+  salida, tokens, `maxModelCallsPerMessage`, `approvalTimeoutMs`, `webHost`, `webPort` y
+  `maxBodyBytes`. No añadas bucles sin límite.
 - Los timeouts cancelan la herramienta con `AbortSignal` y limpian el temporizador.
 
 ### Salida y logs

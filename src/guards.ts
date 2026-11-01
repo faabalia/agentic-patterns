@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { LIMITS, MODELS } from "./config.js";
 import { structured } from "./llm.js";
+import { escapeForTag, normalize } from "./untrusted.js";
+
+export { escapeForTag } from "./untrusted.js";
 
 /* ─────────────── Patrón 02 · Guardrails de INPUT ─────────────── */
 
@@ -16,20 +19,7 @@ const RiskSchema = z.object({
   reason: z.string(),
 });
 
-// Capa 1 (determinista): normalizar y eliminar caracteres de control e invisibles
-// (zero-width, bidi, word joiners, BOM y "tag chars" usados para ASCII smuggling).
-const INVISIBLE =
-  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
-
-function normalize(msg: string): string {
-  return msg.normalize("NFKC").replace(INVISIBLE, "").trim();
-}
-
-// Escapa los delimitadores para que el usuario no pueda cerrar la etiqueta de datos no confiables.
-export function escapeForTag(msg: string): string {
-  return msg.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
+// Capa 1 (determinista): `normalize` (en untrusted.ts) limpia controles e invisibles.
 // Capa 2 (determinista): patrones obvios, barato y sin LLM.
 const OBVIOUS_INJECTION = /ignore (all|previous|prior) instructions|ignora (todas )?las instrucciones|system prompt/i;
 

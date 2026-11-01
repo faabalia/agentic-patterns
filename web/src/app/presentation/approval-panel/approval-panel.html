@@ -1,0 +1,43 @@
+@if (approvals().length > 0) {
+  <section class="panel" aria-label="Aprobaciones pendientes">
+    <h2>Aprobación humana requerida</h2>
+    <p class="hint">
+      Una acción de riesgo alto necesita tu visto bueno antes de ejecutarse.
+    </p>
+
+    @for (approval of approvals(); track approval.id) {
+      <article class="card">
+        <header>
+          <strong>{{ approval.action }}</strong>
+          <span class="customer">Cliente: {{ approval.customerId }}</span>
+        </header>
+
+        <p class="message">{{ approval.userMessage }}</p>
+
+        <details>
+          <summary>Ver argumentos</summary>
+          <pre>{{ approval.args | json }}</pre>
+        </details>
+
+        <label>
+          Motivo del rechazo (opcional)
+          <textarea
+            rows="2"
+            [value]="reasonFor(approval.id)"
+            (input)="setReason(approval.id, $any($event.target).value)"
+            placeholder="Explica por qué no procede"
+          ></textarea>
+        </label>
+
+        <div class="actions">
+          <button type="button" class="reject" data-action="reject" (click)="reject(approval.id)">
+            Rechazar
+          </button>
+          <button type="button" class="approve" data-action="approve" (click)="approve(approval.id)">
+            Aprobar
+          </button>
+        </div>
+      </article>
+    }
+  </section>
+}

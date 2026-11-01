@@ -1,0 +1,54 @@
+<main class="chat">
+  <header class="topbar">
+    <div>
+      <h1>Asistente de atención al cliente</h1>
+      <p class="subtitle">Facturación, soporte técnico y ventas</p>
+    </div>
+    <span
+      class="status"
+      [class.online]="store.connection() === 'connected'"
+      [title]="'Canal de aprobaciones: ' + store.connection()"
+    >
+      {{ store.connection() === 'connected' ? 'Conectado' : 'Sin conexión' }}
+    </span>
+  </header>
+
+  @if (store.error(); as error) {
+    <div class="error" role="alert">
+      <span>{{ error }}</span>
+      <button type="button" (click)="store.dismissError()" aria-label="Cerrar aviso">×</button>
+    </div>
+  }
+
+  <section class="messages" #list aria-live="polite">
+    @for (item of store.messages(); track item.id) {
+      <article class="message" [class.user]="item.role === 'user'" [class.error]="item.error">
+        <span class="role">{{ item.role === 'user' ? 'Tú' : 'Asistente' }}</span>
+        <p>{{ item.text }}</p>
+        @if (item.pending) {
+          <span class="typing" aria-label="El asistente está escribiendo">…</span>
+        }
+      </article>
+    } @empty {
+      <p class="empty">
+        Prueba con «¿Cuánto era la factura INV-1001?» o «Reembólsame la INV-1001».
+      </p>
+    }
+  </section>
+
+  <app-approval-panel [approvals]="store.pendingApprovals()" (decide)="onDecide($event)" />
+
+  <form class="composer" (submit)="onSubmit($event)">
+    <textarea
+      rows="2"
+      [value]="message()"
+      (input)="onInput($event)"
+      [disabled]="store.busy()"
+      placeholder="Escribe tu mensaje…"
+      aria-label="Mensaje"
+    ></textarea>
+    <button type="submit" [disabled]="store.busy() || message().trim().length === 0">
+      {{ store.busy() ? 'Enviando…' : 'Enviar' }}
+    </button>
+  </form>
+</main>

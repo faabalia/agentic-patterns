@@ -4,6 +4,7 @@ import { client } from "./llm.js";
 import { TOOLS, TOOLSETS, toApiTools } from "./tools.js";
 import type { ToolContext } from "./tools.js";
 import { requestApproval } from "./approvals.js";
+import { formatRejectionToolResult } from "./approval-format.js";
 import type { Route } from "./router.js";
 
 /* ─────────────── Patrón 08 · Bucle agéntico con herramientas ─────────────── */
@@ -110,7 +111,7 @@ async function executeTool(
     const decision = await requestApproval({ name, args, customerId: session.customerId, userMessage });
     if (decision.status === "rejected") {
       return {
-        content: `Acción rechazada por una persona. Motivo: ${decision.reason}. Replanifica o informa al usuario.`,
+        content: formatRejectionToolResult(decision.reason),
         isError: true,
       };
     }

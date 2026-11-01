@@ -12,4 +12,8 @@ export const LIMITS = {
   outputRetries: 2,
   maxTokens: 1_024,
   maxModelCallsPerMessage: 12, // presupuesto de llamadas al modelo de agente por mensaje (incluye reintentos)
+  approvalTimeoutMs: 120_000, // espera máxima de una aprobación humana en la web
+  webPort: 8787,
+  webHost: "127.0.0.1", // solo loopback: no expone la API a la red local
+  maxBodyBytes: 32_768,
 } as const;

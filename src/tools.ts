@@ -39,7 +39,7 @@ const lookupInvoice: ToolDef<z.ZodObject<{ invoiceId: z.ZodString }>> = {
   schema: z.object({ invoiceId: z.string().regex(/^INV-\d{4}$/) }),
   run: async ({ invoiceId }, ctx) => {
     const inv = ownInvoice(invoiceId, ctx);
-    if (!inv) return `Error: la factura ${invoiceId} no existe. Pide al usuario que verifique el ID.`;
+    if (!inv) throw new Error(`la factura ${invoiceId} no existe. Pide al usuario que verifique el ID.`);
     const { amount, refunded, status, date } = inv;
     return JSON.stringify({ invoiceId, amount, refunded, status, date });
   },
